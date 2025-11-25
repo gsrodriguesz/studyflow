@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
+import { useAuth } from './AuthContext'
 
 type Theme = 'dark' | 'light'
 type PrimaryColor = 'amber' | 'blue' | 'green' | 'purple' | 'rose'
@@ -21,8 +22,17 @@ const colors: Record<PrimaryColor, string> = {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
+    const { userProfile } = useAuth()
     const [theme, setTheme] = useState<Theme>('dark')
     const [primaryColor, setPrimaryColor] = useState<PrimaryColor>('amber')
+
+    // Sync with user profile
+    useEffect(() => {
+        if (userProfile?.preferences) {
+            setTheme(userProfile.preferences.theme)
+            setPrimaryColor(userProfile.preferences.primaryColor as PrimaryColor)
+        }
+    }, [userProfile])
 
     useEffect(() => {
         const root = document.documentElement

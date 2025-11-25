@@ -47,6 +47,12 @@ export interface UserProfile {
     level: number;
     streak: number;
     lastStudyDate: any; // Timestamp
+    preferences?: {
+        theme: 'light' | 'dark';
+        primaryColor: string;
+        pomodoroDuration: number;
+        srsNotifications: boolean;
+    };
 }
 
 export interface Note {
@@ -91,7 +97,13 @@ export const AuthService = {
                     coins: 0,
                     level: 1,
                     streak: 0,
-                    createdAt: serverTimestamp()
+                    createdAt: serverTimestamp(),
+                    preferences: {
+                        theme: 'dark',
+                        primaryColor: 'amber',
+                        pomodoroDuration: 25,
+                        srsNotifications: true
+                    }
                 });
             }
             return user;
@@ -112,6 +124,11 @@ export const AuthService = {
                 callback(doc.data() as UserProfile);
             }
         });
+    },
+
+    updatePreferences: async (uid: string, preferences: UserProfile['preferences']) => {
+        const userRef = doc(db, 'users', uid);
+        await updateDoc(userRef, { preferences });
     }
 };
 

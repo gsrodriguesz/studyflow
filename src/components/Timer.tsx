@@ -1,46 +1,16 @@
-import { useState, useEffect, useCallback } from 'react'
 import { Play, Pause, RotateCcw } from 'lucide-react'
 import clsx from 'clsx'
+import { useFocus } from '../context/FocusContext'
 
-interface TimerProps {
-    onComplete: () => void
-}
-
-export default function Timer({ onComplete }: TimerProps) {
-    const [timeLeft, setTimeLeft] = useState(25 * 60)
-    const [isActive, setIsActive] = useState(false)
-    const [mode, setMode] = useState<'focus' | 'break'>('focus')
-
-    const toggleTimer = () => setIsActive(!isActive)
-
-    const resetTimer = useCallback(() => {
-        setIsActive(false)
-        setTimeLeft(mode === 'focus' ? 25 * 60 : 5 * 60)
-    }, [mode])
-
-    const switchMode = (newMode: 'focus' | 'break') => {
-        setMode(newMode)
-        setIsActive(false)
-        setTimeLeft(newMode === 'focus' ? 25 * 60 : 5 * 60)
-    }
-
-    useEffect(() => {
-        let interval: ReturnType<typeof setInterval> | null = null
-
-        if (isActive && timeLeft > 0) {
-            interval = setInterval(() => {
-                setTimeLeft((time) => time - 1)
-            }, 1000)
-        } else if (timeLeft === 0) {
-            setIsActive(false)
-            onComplete()
-            // Optional: Play sound
-        }
-
-        return () => {
-            if (interval) clearInterval(interval)
-        }
-    }, [isActive, timeLeft, onComplete])
+export default function Timer() {
+    const { 
+        timeLeft, 
+        isActive, 
+        mode, 
+        toggleTimer, 
+        resetTimer, 
+        switchMode 
+    } = useFocus()
 
     const formatTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60)
@@ -48,9 +18,8 @@ export default function Timer({ onComplete }: TimerProps) {
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
     }
 
-    const progress = mode === 'focus'
-        ? ((25 * 60 - timeLeft) / (25 * 60)) * 100
-        : ((5 * 60 - timeLeft) / (5 * 60)) * 100
+    const totalTime = mode === 'focus' ? 25 * 60 : 5 * 60
+    const progress = ((totalTime - timeLeft) / totalTime) * 100
 
     return (
         <div className="flex flex-col items-center justify-center space-y-8">

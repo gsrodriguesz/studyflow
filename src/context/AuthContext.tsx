@@ -8,6 +8,7 @@ interface AuthContextType {
     loading: boolean
     login: () => Promise<void>
     logout: () => Promise<void>
+    updatePreferences: (preferences: NonNullable<UserProfile['preferences']>) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -54,8 +55,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await AuthService.logout()
     }
 
+    const updatePreferences = async (preferences: NonNullable<UserProfile['preferences']>) => {
+        if (user) {
+            await AuthService.updatePreferences(user.uid, preferences)
+        }
+    }
+
     return (
-        <AuthContext.Provider value={{ user, userProfile, loading, login, logout }}>
+        <AuthContext.Provider value={{ user, userProfile, loading, login, logout, updatePreferences }}>
             {!loading && children}
         </AuthContext.Provider>
     )
