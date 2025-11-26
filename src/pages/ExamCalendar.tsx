@@ -27,7 +27,7 @@ export default function ExamCalendar() {
         if (exam) {
             setEditingExam(exam)
             setTitle(exam.title)
-            setDate(exam.date)
+            setDate(exam.date || '')
             setTopics(exam.topics || '')
         } else {
             setEditingExam(null)
@@ -76,13 +76,17 @@ export default function ExamCalendar() {
     }
 
     // Transform exams to calendar events
-    const calendarEvents = exams.map(exam => ({
-        date: parseISO(exam.date),
-        title: exam.title,
-        type: 'exam' as const
-    }))
+    const calendarEvents = exams
+        .filter(exam => exam.date)
+        .map(exam => ({
+            date: parseISO(exam.date!),
+            title: exam.title,
+            type: 'exam' as const
+        }))
 
-    const upcomingExams = exams.filter(e => new Date(e.date) >= new Date()).slice(0, 5)
+    const upcomingExams = exams
+        .filter(e => e.date && new Date(e.date) >= new Date())
+        .slice(0, 5)
 
     return (
         <div className="space-y-8">
@@ -124,7 +128,7 @@ export default function ExamCalendar() {
                                         <div className="flex justify-between items-start mb-2">
                                             <h3 className="font-bold text-white">{exam.title}</h3>
                                             <span className="text-xs font-mono text-primary bg-primary/10 px-2 py-1 rounded">
-                                                {format(parseISO(exam.date), 'MMM d')}
+                                                {exam.date && format(parseISO(exam.date), 'MMM d')}
                                             </span>
                                         </div>
                                         {exam.topics && (

@@ -69,25 +69,53 @@ export default function Simulations() {
             
             // Process files if uploaded
             if (examFile) {
-                const examText = await FileParser.extractText(examFile)
-                
-                if (!examText || examText.trim().length === 0) {
-                    alert("Could not extract text from the file. If this is a scanned PDF (images), please use a text-based PDF or convert it first.")
-                    setIsProcessing(false)
-                    return
-                }
+                let simulationData: any = null;
 
-                let answerKeyText = ''
-                if (answerKeyFile) {
-                    answerKeyText = await FileParser.extractText(answerKeyFile)
-                }
+                // Check file type
+                if (examFile.type === 'application/pdf') {
+                    // Use Image-based extraction for PDFs (Better for layout/OCR)
+                    try {
+                        const images = await FileParser.convertPDFToImages(examFile);
+                        
+                        let answerKeyText = ''
+                        if (answerKeyFile) {
+                            answerKeyText = await FileParser.extractText(answerKeyFile)
+                        }
 
-                const simulationData = await AIService.generateSimulationFromText(examText, answerKeyText)
+                        simulationData = await AIService.generateSimulationFromImages(images, answerKeyText)
+                    } catch (err) {
+                        console.error("Error processing PDF as images:", err);
+                        alert("Error processing PDF. Falling back to text extraction...");
+                        // Fallback to text extraction if image conversion fails
+                        const examText = await FileParser.extractText(examFile);
+                        let answerKeyText = ''
+                        if (answerKeyFile) {
+                            answerKeyText = await FileParser.extractText(answerKeyFile)
+                        }
+                        simulationData = await AIService.generateSimulationFromText(examText, answerKeyText)
+                    }
+                } else {
+                    // DOCX or other text formats
+                    const examText = await FileParser.extractText(examFile)
+                    
+                    if (!examText || examText.trim().length === 0) {
+                        alert("Could not extract text from the file.")
+                        setIsProcessing(false)
+                        return
+                    }
+
+                    let answerKeyText = ''
+                    if (answerKeyFile) {
+                        answerKeyText = await FileParser.extractText(answerKeyFile)
+                    }
+
+                    simulationData = await AIService.generateSimulationFromText(examText, answerKeyText)
+                }
                 
                 if (simulationData?.questions && simulationData.questions.length > 0) {
                     questions = simulationData.questions
                 } else {
-                    alert("AI could not generate questions from this text. Please try a different file or format.")
+                    alert("AI could not generate questions from this file. Please try a different file.")
                     setIsProcessing(false)
                     return
                 }
