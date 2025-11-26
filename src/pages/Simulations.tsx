@@ -1,7 +1,9 @@
-import { FileText, Upload, Clock, BarChart2, Play, Plus, X, Trash2, CheckCircle } from 'lucide-react'
+import { FileText, BarChart2, Play, Plus, X, CheckCircle, Loader2, ChevronRight, ChevronLeft, BookOpen, Target, ArrowLeft } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { FirestoreService, type Exam } from '../services/firebase'
+import { FileParser } from '../utils/fileParser'
+import { AIService } from '../services/ai'
 import clsx from 'clsx'
 
 export default function Simulations() {
@@ -10,9 +12,23 @@ export default function Simulations() {
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [editingExam, setEditingExam] = useState<Exam | null>(null)
     
+    // Upload State
+    const [examFile, setExamFile] = useState<File | null>(null)
+    const [answerKeyFile, setAnswerKeyFile] = useState<File | null>(null)
+    const [isProcessing, setIsProcessing] = useState(false)
+
+    // Navigation State
+    const [viewMode, setViewMode] = useState<'list' | 'details' | 'taking' | 'results'>('list')
+    const [selectedExam, setSelectedExam] = useState<Exam | null>(null)
+
+    // Taking Simulation State
+    const [activeQuestions, setActiveQuestions] = useState<NonNullable<Exam['questions']>>([])
+    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
+    const [userAnswers, setUserAnswers] = useState<Record<string, number>>({})
+    const [sessionScore, setSessionScore] = useState(0)
+
     // Form State
     const [title, setTitle] = useState('')
-    const [date, setDate] = useState('')
     const [topics, setTopics] = useState('')
 
     useEffect(() => {
@@ -25,14 +41,15 @@ export default function Simulations() {
         if (exam) {
             setEditingExam(exam)
             setTitle(exam.title)
-            setDate(exam.date)
             setTopics(exam.topics || '')
         } else {
             setEditingExam(null)
             setTitle('')
-            setDate('')
             setTopics('')
         }
+        // Reset files
+        setExamFile(null)
+        setAnswerKeyFile(null)
         setIsModalOpen(true)
     }
 
@@ -45,16 +62,46 @@ export default function Simulations() {
         e.preventDefault()
         if (!user) return
 
-        const examData = {
-            userId: user.uid,
-            title,
-            date,
-            topics,
-            status: editingExam ? editingExam.status : 'upcoming',
-            score: editingExam ? editingExam.score : '-'
-        }
+        setIsProcessing(true)
 
         try {
+            let questions = editingExam?.questions || []
+            
+            // Process files if uploaded
+            if (examFile) {
+                const examText = await FileParser.extractText(examFile)
+                
+                if (!examText || examText.trim().length === 0) {
+                    alert("Could not extract text from the file. If this is a scanned PDF (images), please use a text-based PDF or convert it first.")
+                    setIsProcessing(false)
+                    return
+                }
+
+                let answerKeyText = ''
+                if (answerKeyFile) {
+                    answerKeyText = await FileParser.extractText(answerKeyFile)
+                }
+
+                const simulationData = await AIService.generateSimulationFromText(examText, answerKeyText)
+                
+                if (simulationData?.questions && simulationData.questions.length > 0) {
+                    questions = simulationData.questions
+                } else {
+                    alert("AI could not generate questions from this text. Please try a different file or format.")
+                    setIsProcessing(false)
+                    return
+                }
+            }
+
+            const examData = {
+                userId: user.uid,
+                title,
+                topics,
+                status: editingExam ? editingExam.status : 'upcoming',
+                score: editingExam ? editingExam.score : '-',
+                questions: questions
+            }
+
             if (editingExam) {
                 await FirestoreService.updateDocument('simulations', editingExam.id, examData)
             } else {
@@ -64,28 +111,86 @@ export default function Simulations() {
         } catch (error) {
             console.error("Error saving simulation:", error)
             alert("Failed to save simulation")
+        } finally {
+            setIsProcessing(false)
         }
     }
 
     const handleDelete = async (id: string) => {
         if (confirm('Are you sure you want to delete this simulation?')) {
             await FirestoreService.deleteDocument('simulations', id)
+            if (selectedExam?.id === id) {
+                setViewMode('list')
+                setSelectedExam(null)
+            }
         }
     }
 
-    const handleComplete = async (exam: Exam) => {
-        const score = prompt('Enter score (e.g. 85%):', '0%')
-        if (score !== null) {
-            await FirestoreService.updateDocument('simulations', exam.id, {
-                status: 'completed',
-                score
-            })
+    const openSimulationDetails = (exam: Exam) => {
+        setSelectedExam(exam)
+        setViewMode('details')
+    }
+
+    const startSession = (questions: NonNullable<Exam['questions']>) => {
+        if (questions.length === 0) {
+            alert("No questions available for this selection.")
+            return
         }
+        setActiveQuestions(questions)
+        setCurrentQuestionIndex(0)
+        setUserAnswers({})
+        setViewMode('taking')
+    }
+
+    const handleAnswerSelect = (questionId: string, optionIndex: number) => {
+        setUserAnswers(prev => ({ ...prev, [questionId]: optionIndex }))
+    }
+
+    const submitSession = async () => {
+        if (!selectedExam || !user) return
+        
+        let correctCount = 0
+        activeQuestions.forEach(q => {
+            if (userAnswers[q.id] === q.correctAnswer) correctCount++
+        })
+
+        const scorePercentage = Math.round((correctCount / activeQuestions.length) * 100)
+        setSessionScore(scorePercentage)
+
+        // Update Firestore with new answers (merging with existing)
+        // We want to preserve the history of answers in the main document
+        const updatedQuestions = selectedExam.questions?.map(q => {
+            if (userAnswers[q.id] !== undefined) {
+                return { ...q, userAnswer: userAnswers[q.id] }
+            }
+            return q
+        })
+
+        // Calculate overall score for the exam based on all questions answered so far
+        const totalAnsweredCorrectly = updatedQuestions?.filter(q => q.userAnswer === q.correctAnswer).length || 0
+        const totalQuestions = updatedQuestions?.length || 1
+        const overallScore = Math.round((totalAnsweredCorrectly / totalQuestions) * 100) + '%'
+
+        await FirestoreService.updateDocument('simulations', selectedExam.id, {
+            questions: updatedQuestions,
+            score: overallScore,
+            status: 'completed' // Mark as completed if at least one session is done? Or maybe keep it open.
+        })
+
+        setViewMode('results')
+    }
+
+    const returnToDetails = () => {
+        setViewMode('details')
+    }
+
+    const returnToList = () => {
+        setViewMode('list')
+        setSelectedExam(null)
     }
 
     // Stats Calculation
     const completedExams = exams.filter(e => e.status === 'completed')
-    const examsTaken = completedExams.length
     
     const averageScore = completedExams.length > 0 
         ? Math.round(completedExams.reduce((acc, curr) => {
@@ -94,33 +199,32 @@ export default function Simulations() {
         }, 0) / completedExams.length)
         : 0
 
-    return (
+    // --- RENDER HELPERS ---
+
+    const renderList = () => (
         <div className="space-y-8 relative">
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold text-white mb-2">Simulations</h1>
-                    <p className="text-gray-400">Practice with mock exams and track your performance.</p>
+                    <p className="text-gray-400">Your digital notebook of questions and exams.</p>
                 </div>
-                <div className="flex gap-2">
-                    <button 
-                        onClick={() => handleOpenModal()}
-                        className="bg-primary text-background px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-primary/90 transition-colors"
-                    >
-                        <Plus className="w-5 h-5" />
-                        Add Simulation
-                    </button>
-                </div>
+                <button 
+                    onClick={() => handleOpenModal()}
+                    className="bg-primary text-background px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-primary/90 transition-colors"
+                >
+                    <Plus className="w-5 h-5" />
+                    Add Simulation
+                </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Stats */}
                 <div className="bg-surface border border-white/10 rounded-2xl p-6 flex items-center gap-4">
                     <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-500">
                         <FileText className="w-6 h-6" />
                     </div>
                     <div>
-                        <p className="text-gray-400 text-sm">Simulations Taken</p>
-                        <h3 className="text-2xl font-bold text-white">{examsTaken}</h3>
+                        <p className="text-gray-400 text-sm">Simulations</p>
+                        <h3 className="text-2xl font-bold text-white">{exams.length}</h3>
                     </div>
                 </div>
                 <div className="bg-surface border border-white/10 rounded-2xl p-6 flex items-center gap-4">
@@ -134,21 +238,20 @@ export default function Simulations() {
                 </div>
                 <div className="bg-surface border border-white/10 rounded-2xl p-6 flex items-center gap-4">
                     <div className="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-500">
-                        <Clock className="w-6 h-6" />
+                        <BookOpen className="w-6 h-6" />
                     </div>
                     <div>
-                        <p className="text-gray-400 text-sm">Next Simulation</p>
-                        <h3 className="text-xl font-bold text-white truncate max-w-[150px]">
-                            {exams.find(e => e.status === 'upcoming')?.date || 'None'}
+                        <p className="text-gray-400 text-sm">Total Questions</p>
+                        <h3 className="text-xl font-bold text-white">
+                            {exams.reduce((acc, curr) => acc + (curr.questions?.length || 0), 0)}
                         </h3>
                     </div>
                 </div>
             </div>
 
-            {/* Exam List */}
             <div className="bg-surface border border-white/10 rounded-2xl overflow-hidden">
                 <div className="p-6 border-b border-white/10">
-                    <h2 className="text-xl font-bold text-white">Recent & Upcoming Simulations</h2>
+                    <h2 className="text-xl font-bold text-white">Available Simulations</h2>
                 </div>
                 <div className="divide-y divide-white/10">
                     {exams.length === 0 ? (
@@ -157,17 +260,19 @@ export default function Simulations() {
                         </div>
                     ) : (
                         exams.map((exam) => (
-                            <div key={exam.id} className="p-4 flex items-center justify-between hover:bg-white/5 transition-colors group">
-                                <div className="flex items-center gap-4 cursor-pointer" onClick={() => handleOpenModal(exam)}>
-                                    <div className={clsx(
-                                        "w-10 h-10 rounded-lg flex items-center justify-center",
-                                        exam.status === 'completed' ? "bg-green-500/20 text-green-500" : "bg-white/5 text-gray-400"
-                                    )}>
+                            <div key={exam.id} className="p-4 flex items-center justify-between hover:bg-white/5 transition-colors group cursor-pointer" onClick={() => openSimulationDetails(exam)}>
+                                <div className="flex items-center gap-4">
+                                    <div className="w-10 h-10 rounded-lg bg-white/5 text-gray-400 flex items-center justify-center">
                                         <FileText className="w-5 h-5" />
                                     </div>
                                     <div>
                                         <h3 className="font-bold text-white">{exam.title}</h3>
-                                        <p className="text-sm text-gray-400">{exam.date} • {exam.topics || 'No topics'}</p>
+                                        <p className="text-sm text-gray-400">{exam.topics || 'General'}</p>
+                                        {exam.questions && (
+                                            <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded mt-1 inline-block">
+                                                {exam.questions.length} Questions
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-6">
@@ -177,34 +282,241 @@ export default function Simulations() {
                                             {exam.score}
                                         </p>
                                     </div>
-                                    
-                                    <div className="flex items-center gap-2">
-                                        {exam.status === 'upcoming' ? (
-                                            <button 
-                                                onClick={() => handleComplete(exam)}
-                                                className="px-4 py-2 bg-primary/10 text-primary rounded-lg text-sm font-bold hover:bg-primary/20 transition-colors flex items-center gap-2"
-                                            >
-                                                <CheckCircle className="w-4 h-4" />
-                                                Complete
-                                            </button>
-                                        ) : (
-                                            <span className="px-4 py-2 text-green-500 text-sm font-bold flex items-center gap-2">
-                                                Completed
-                                            </span>
-                                        )}
-                                        <button 
-                                            onClick={() => handleDelete(exam.id)}
-                                            className="p-2 text-gray-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
+                                    <ChevronRight className="w-5 h-5 text-gray-500" />
                                 </div>
                             </div>
                         ))
                     )}
                 </div>
             </div>
+        </div>
+    )
+
+    const renderDetails = () => {
+        if (!selectedExam) return null
+        
+        // Group questions by topic
+        const questionsByTopic = (selectedExam.questions || []).reduce((acc, q) => {
+            const topic = q.topic || 'General'
+            if (!acc[topic]) acc[topic] = []
+            acc[topic].push(q)
+            return acc
+        }, {} as Record<string, typeof selectedExam.questions>)
+
+        return (
+            <div className="max-w-4xl mx-auto space-y-8">
+                <button onClick={returnToList} className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors">
+                    <ArrowLeft className="w-5 h-5" />
+                    Back to Simulations
+                </button>
+
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-3xl font-bold text-white mb-2">{selectedExam.title}</h1>
+                        <p className="text-gray-400">{selectedExam.questions?.length || 0} Questions Total</p>
+                    </div>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={() => handleOpenModal(selectedExam)}
+                            className="bg-surface border border-white/10 text-white px-4 py-2 rounded-xl font-bold hover:bg-white/5 transition-colors"
+                        >
+                            Edit
+                        </button>
+                        <button 
+                            onClick={() => handleDelete(selectedExam.id)}
+                            className="bg-red-500/10 text-red-500 border border-red-500/20 px-4 py-2 rounded-xl font-bold hover:bg-red-500/20 transition-colors"
+                        >
+                            Delete
+                        </button>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Full Exam Card */}
+                    <div className="bg-surface border border-white/10 rounded-2xl p-6 hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => startSession(selectedExam.questions || [])}>
+                        <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center text-primary mb-4 group-hover:scale-110 transition-transform">
+                            <Play className="w-6 h-6" />
+                        </div>
+                        <h3 className="text-xl font-bold text-white mb-2">Full Simulation</h3>
+                        <p className="text-gray-400 text-sm mb-4">Practice all {selectedExam.questions?.length} questions in this simulation.</p>
+                        <span className="text-primary font-bold text-sm flex items-center gap-1">
+                            Start Now <ChevronRight className="w-4 h-4" />
+                        </span>
+                    </div>
+
+                    {/* Stats Card */}
+                    <div className="bg-surface border border-white/10 rounded-2xl p-6">
+                        <div className="w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center text-green-500 mb-4">
+                            <BarChart2 className="w-6 h-6" />
+                        </div>
+                        <h3 className="text-xl font-bold text-white mb-2">Performance</h3>
+                        <p className="text-gray-400 text-sm mb-4">Current overall score based on answered questions.</p>
+                        <div className="text-3xl font-bold text-white">{selectedExam.score || '-'}</div>
+                    </div>
+                </div>
+
+                <div>
+                    <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                        <Target className="w-5 h-5 text-primary" />
+                        Practice by Topic
+                    </h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {Object.entries(questionsByTopic).map(([topic, questions]) => (
+                            <button 
+                                key={topic}
+                                onClick={() => startSession(questions || [])}
+                                className="bg-surface border border-white/10 rounded-xl p-4 text-left hover:bg-white/5 transition-colors group"
+                            >
+                                <div className="flex justify-between items-start mb-2">
+                                    <h4 className="font-bold text-white truncate pr-2">{topic}</h4>
+                                    <span className="bg-white/10 text-xs text-gray-300 px-2 py-1 rounded">
+                                        {questions?.length}
+                                    </span>
+                                </div>
+                                <p className="text-xs text-gray-500 group-hover:text-primary transition-colors">Click to practice</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
+    const renderTaking = () => {
+        const question = activeQuestions[currentQuestionIndex]
+        const totalQuestions = activeQuestions.length
+        const isLastQuestion = currentQuestionIndex === totalQuestions - 1
+
+        return (
+            <div className="h-full flex flex-col max-w-3xl mx-auto">
+                <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-2xl font-bold text-white">{selectedExam?.title}</h2>
+                    <button onClick={returnToDetails} className="text-gray-400 hover:text-white">
+                        <X className="w-6 h-6" />
+                    </button>
+                </div>
+
+                <div className="flex-1 bg-surface border border-white/10 rounded-2xl p-8 overflow-y-auto">
+                    <div className="space-y-8">
+                        <div className="flex justify-between text-sm text-gray-400">
+                            <span>Question {currentQuestionIndex + 1} of {totalQuestions}</span>
+                            <span className="text-primary">{question.topic || 'General'}</span>
+                        </div>
+                        <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden">
+                            <div 
+                                className="bg-primary h-full transition-all duration-300" 
+                                style={{ width: `${((currentQuestionIndex + 1) / totalQuestions) * 100}%` }}
+                            />
+                        </div>
+
+                        <h3 className="text-xl font-medium text-white leading-relaxed">
+                            {question.question}
+                        </h3>
+
+                        <div className="space-y-3">
+                            {question.options.map((option, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => handleAnswerSelect(question.id, idx)}
+                                    className={clsx(
+                                        "w-full text-left p-4 rounded-xl border transition-all duration-200",
+                                        userAnswers[question.id] === idx
+                                            ? "bg-primary/20 border-primary text-white"
+                                            : "bg-white/5 border-transparent text-gray-300 hover:bg-white/10"
+                                    )}
+                                >
+                                    <span className="font-bold mr-3">{String.fromCharCode(65 + idx)}.</span>
+                                    {option}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex justify-between mt-6">
+                    <button
+                        onClick={() => setCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
+                        disabled={currentQuestionIndex === 0}
+                        className="px-6 py-3 rounded-xl font-medium text-white disabled:opacity-50 hover:bg-white/10 transition-colors flex items-center gap-2"
+                    >
+                        <ChevronLeft className="w-5 h-5" />
+                        Previous
+                    </button>
+                    
+                    {isLastQuestion ? (
+                        <button
+                            onClick={submitSession}
+                            className="px-8 py-3 bg-green-500 text-white rounded-xl font-bold hover:bg-green-600 transition-colors flex items-center gap-2"
+                        >
+                            Finish Session
+                            <CheckCircle className="w-5 h-5" />
+                        </button>
+                    ) : (
+                        <button
+                            onClick={() => setCurrentQuestionIndex(prev => Math.min(totalQuestions - 1, prev + 1))}
+                            className="px-6 py-3 bg-primary text-background rounded-xl font-bold hover:bg-primary/90 transition-colors flex items-center gap-2"
+                        >
+                            Next
+                            <ChevronRight className="w-5 h-5" />
+                        </button>
+                    )}
+                </div>
+            </div>
+        )
+    }
+
+    const renderResults = () => (
+        <div className="h-full flex flex-col max-w-3xl mx-auto text-center">
+            <div className="flex-1 bg-surface border border-white/10 rounded-2xl p-8 overflow-y-auto">
+                <div className="w-24 h-24 bg-primary/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <CheckCircle className="w-12 h-12 text-primary" />
+                </div>
+                <h3 className="text-3xl font-bold text-white mb-2">Session Completed!</h3>
+                <p className="text-xl text-gray-400 mb-8">
+                    You scored <span className="text-white font-bold">{sessionScore}%</span> on this session.
+                </p>
+
+                <div className="grid gap-4 text-left">
+                    {activeQuestions.map((q, idx) => (
+                        <div key={q.id} className="p-4 bg-black/20 rounded-lg border border-white/5">
+                            <div className="flex justify-between items-start mb-2">
+                                <p className="font-medium text-white">{idx + 1}. {q.question}</p>
+                                <span className="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded">{q.topic}</span>
+                            </div>
+                            <div className="text-sm space-y-1">
+                                <p className={clsx(
+                                    userAnswers[q.id] === q.correctAnswer ? "text-green-400" : "text-red-400"
+                                )}>
+                                    Your Answer: {q.options[userAnswers[q.id]] || 'Skipped'}
+                                </p>
+                                {userAnswers[q.id] !== q.correctAnswer && (
+                                    <p className="text-green-400">Correct Answer: {q.options[q.correctAnswer]}</p>
+                                )}
+                                {q.explanation && (
+                                    <p className="text-gray-500 mt-2 italic">Explanation: {q.explanation}</p>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+            <div className="mt-6">
+                <button 
+                    onClick={returnToDetails}
+                    className="px-8 py-3 bg-primary text-background rounded-xl font-bold hover:bg-primary/90 transition-colors"
+                >
+                    Return to Dashboard
+                </button>
+            </div>
+        </div>
+    )
+
+    return (
+        <>
+            {viewMode === 'list' && renderList()}
+            {viewMode === 'details' && renderDetails()}
+            {viewMode === 'taking' && renderTaking()}
+            {viewMode === 'results' && renderResults()}
 
             {/* Modal */}
             {isModalOpen && (
@@ -231,16 +543,6 @@ export default function Simulations() {
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-1">Date</label>
-                                <input 
-                                    type="date" 
-                                    required
-                                    value={date}
-                                    onChange={e => setDate(e.target.value)}
-                                    className="w-full bg-black/20 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-primary"
-                                />
-                            </div>
-                            <div>
                                 <label className="block text-sm font-medium text-gray-400 mb-1">Topics (Optional)</label>
                                 <textarea 
                                     value={topics}
@@ -249,6 +551,33 @@ export default function Simulations() {
                                     placeholder="List topics to study..."
                                 />
                             </div>
+
+                            {/* File Inputs */}
+                            <div className="pt-4 border-t border-white/10">
+                                <h3 className="text-sm font-bold text-white mb-3">Upload Content (Optional)</h3>
+                                
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-400 mb-1">Exam File (PDF/DOCX)</label>
+                                        <input 
+                                            type="file" 
+                                            accept=".pdf,.docx"
+                                            onChange={e => setExamFile(e.target.files?.[0] || null)}
+                                            className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-gray-400 mb-1">Answer Key (PDF/DOCX)</label>
+                                        <input 
+                                            type="file" 
+                                            accept=".pdf,.docx"
+                                            onChange={e => setAnswerKeyFile(e.target.files?.[0] || null)}
+                                            className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
                             <div className="flex justify-end gap-3 mt-6">
                                 <button 
                                     type="button"
@@ -259,15 +588,17 @@ export default function Simulations() {
                                 </button>
                                 <button 
                                     type="submit"
-                                    className="px-6 py-2 bg-primary text-background rounded-lg font-bold hover:bg-primary/90 transition-colors"
+                                    disabled={isProcessing}
+                                    className="px-6 py-2 bg-primary text-background rounded-lg font-bold hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                                 >
-                                    Save Simulation
+                                    {isProcessing && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    {isProcessing ? 'Processing...' : 'Save Simulation'}
                                 </button>
                             </div>
                         </form>
                     </div>
                 </div>
             )}
-        </div>
+        </>
     )
 }

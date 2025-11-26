@@ -24,6 +24,12 @@ export interface QuizQuestion {
     options: string[];
     correctAnswer: number;
     explanation: string;
+    topic?: string;
+}
+
+export interface SimulationData {
+    title: string;
+    questions: QuizQuestion[];
 }
 
 export interface Flashcard {
@@ -90,6 +96,7 @@ export const AIService = {
             const response = await result.response;
             const text = response.text();
             const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            console.log("Generated Quiz JSON:", cleanText);
             return JSON.parse(cleanText) as QuizQuestion[];
         } catch (error) {
             console.error("Error generating quiz:", error);
@@ -121,6 +128,62 @@ export const AIService = {
         } catch (error) {
             console.error("Error generating flashcards:", error);
             return [];
+        }
+    },
+
+    async generateSimulationFromText(text: string, answerKeyText?: string): Promise<SimulationData | null> {
+        if (!API_KEY) return null;
+
+        let prompt = `
+            Analyze the following text which is an exam or quiz. Extract the title (if any, otherwise infer one) and all questions.
+            
+            Exam Content:
+            "${text.substring(0, 10000)}..."
+        `;
+
+        if (answerKeyText) {
+            prompt += `
+            
+            Answer Key Content:
+            "${answerKeyText.substring(0, 5000)}..."
+            
+            Use the provided Answer Key to determine the correct answer for each question.
+            `;
+        }
+
+        prompt += `
+            Output ONLY a JSON object with this structure:
+            {
+                "title": "Exam Title",
+                "questions": [
+                    {
+                        "id": "1",
+                        "question": "Question text",
+                        "options": ["Option A", "Option B", "Option C", "Option D"],
+                        "correctAnswer": 0, // Index of correct option (0-3). If not found, infer the most likely correct answer or set to -1.
+                        "explanation": "Brief explanation of why this is correct (derived from answer key if available)",
+                        "topic": "Specific topic of this question (e.g. 'Derivatives', 'History of Rome', 'Organic Chemistry')"
+                    }
+                ]
+            }
+            
+            Ensure options are extracted cleanly. If it's an open-ended question, try to convert it to multiple choice or skip it.
+            No markdown.
+        `;
+
+        try {
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            const responseText = response.text();
+
+            // Improved JSON extraction
+            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+            const jsonString = jsonMatch ? jsonMatch[0] : responseText;
+
+            return JSON.parse(jsonString) as SimulationData;
+        } catch (error) {
+            console.error("Error generating simulation:", error);
+            return null;
         }
     }
 };

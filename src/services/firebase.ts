@@ -70,11 +70,20 @@ export interface Exam {
     id: string;
     userId: string;
     title: string;
-    date: string; // YYYY-MM-DD
+    date?: string;
     score?: string; // e.g. "85%" or "A"
     status: 'upcoming' | 'completed';
     topics?: string;
     createdAt: any;
+    questions?: {
+        id: string;
+        question: string;
+        options: string[];
+        correctAnswer: number;
+        explanation: string;
+        topic?: string;
+        userAnswer?: number;
+    }[];
 }
 
 export const AuthService = {
@@ -183,7 +192,11 @@ export const FirestoreService = {
         return onSnapshot(q, (snapshot) => {
             const exams = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Exam));
             // Sort by date asc
-            exams.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            exams.sort((a, b) => {
+                const dateA = a.date ? new Date(a.date).getTime() : 0;
+                const dateB = b.date ? new Date(b.date).getTime() : 0;
+                return dateA - dateB;
+            });
             callback(exams);
         });
     },
@@ -195,8 +208,12 @@ export const FirestoreService = {
         );
         return onSnapshot(q, (snapshot) => {
             const exams = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Exam));
-            // Sort by date asc
-            exams.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            // Sort by createdAt desc
+            exams.sort((a, b) => {
+                const tA = a.createdAt?.seconds ?? 0;
+                const tB = b.createdAt?.seconds ?? 0;
+                return tB - tA;
+            });
             callback(exams);
         });
     }
