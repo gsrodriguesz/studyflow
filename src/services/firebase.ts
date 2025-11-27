@@ -4,8 +4,6 @@ import {
     GoogleAuthProvider,
     signInWithPopup,
     signOut as firebaseSignOut,
-    onAuthStateChanged,
-    type User
 } from 'firebase/auth';
 import {
     getFirestore,

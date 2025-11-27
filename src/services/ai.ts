@@ -132,7 +132,7 @@ export const AIService = {
         }
     },
 
-    async generateSimulationFromText(text: string, answerKeyText?: string): Promise<SimulationData | null> {
+    async generateSimulationFromText(text: string, answerKeyText?: string, onProgress?: (progress: number) => void): Promise<SimulationData | null> {
         if (!API_KEY) return null;
 
         // Chunking strategy to handle large exams
@@ -148,6 +148,9 @@ export const AIService = {
         console.log(`Processing ${chunks.length} chunks...`);
 
         for (let i = 0; i < chunks.length; i++) {
+            if (onProgress) {
+                onProgress(Math.round(((i) / chunks.length) * 100));
+            }
             const chunk = chunks[i];
             const isFirstChunk = i === 0;
 
@@ -230,7 +233,7 @@ export const AIService = {
         };
     },
 
-    async generateSimulationFromImages(images: string[], answerKeyText?: string): Promise<SimulationData | null> {
+    async generateSimulationFromImages(images: string[], answerKeyText?: string, onProgress?: (progress: number) => void): Promise<SimulationData | null> {
         if (!API_KEY) return null;
 
         // Process in batches of 3 pages to avoid hitting token limits while maintaining context
@@ -241,6 +244,9 @@ export const AIService = {
         console.log(`Processing ${images.length} pages in batches of ${BATCH_SIZE}...`);
 
         for (let i = 0; i < images.length; i += BATCH_SIZE) {
+            if (onProgress) {
+                onProgress(Math.round(((i) / images.length) * 100));
+            }
             const imageBatch = images.slice(i, i + BATCH_SIZE);
             const isFirstBatch = i === 0;
 
@@ -269,14 +275,23 @@ export const AIService = {
             }
 
             prompt += `
-                Output ONLY a JSON object with this structure:
+                Output ONLY a valid JSON object.
+                
+                CRITICAL JSON FORMATTING RULES:
+                1. TEXT CONTENT: Escape all double quotes (") inside strings as (\\").
+                2. NEWLINES: Do NOT use actual newline characters inside strings. Use the literal characters \\n for line breaks.
+                3. BACKSLASHES: Escape backslashes as \\\\.
+                4. STRUCTURE: Ensure all arrays and objects are correctly closed with } and ].
+                5. SEPARATORS: Ensure all properties and array items are separated by commas.
+                
+                Structure:
                 {
                     ${isFirstBatch ? '"title": "Exam Title",' : ''}
                     "questions": [
                         {
                             "id": "1", // Use sequential numbers starting from 1 for this batch
-                            "question": "Question text. INCLUDE any statements (I, II, III) or texts that precede the options here.",
-                            "options": ["Option A", "Option B", "Option C", "Option D"],
+                            "question": "Question text. INCLUDE any statements (I, II, III) or texts that precede the options here. Do NOT include the options text here.",
+                            "options": ["Full text of Option A", "Full text of Option B", "Full text of Option C", "Full text of Option D"],
                             "correctAnswer": 0, // Index of correct option (0-3). If not found, infer the most likely correct answer or set to -1.
                             "explanation": "Brief explanation of why this is correct",
                             "topic": "Specific topic of this question (e.g. 'Derivatives', 'History of Rome', 'Organic Chemistry'). BE SPECIFIC."
@@ -284,13 +299,15 @@ export const AIService = {
                     ]
                 }
                 
-                IMPORTANT:
-                1. Extract ALL questions visible. Do not skip any.
-                2. HANDLING STATEMENTS: If a question has statements to evaluate (e.g., I, II, III) before the options, KEEP THEM IN THE "question" TEXT. Do NOT put them in the "options" array.
-                3. The "options" array must ONLY contain the actual choices (A, B, C, D, E).
-                4. If a question has a text or image associated with it, try to describe it in the "question" field.
-                5. Ensure options are separated correctly. Do not merge them.
-                6. No markdown.
+                IMPORTANT CONTENT RULES:
+                1. IGNORE general exam instructions, cover pages, headers, footers, and requests to transcribe phrases. ONLY extract actual exam questions.
+                2. HANDLING TEXTS: If a question refers to a specific text, poem, or passage shown in the image, YOU MUST INCLUDE that text in the "question" field.
+                3. HANDLING STATEMENTS: If a question has statements to evaluate (e.g., I, II, III) before the options, KEEP THEM IN THE "question" TEXT.
+                4. HANDLING OPTIONS: 
+                   - The "options" array must contain the FULL TEXT of the answer choices.
+                   - Do NOT put just "A", "B", "C", etc. Put the actual content.
+                   - If options are inline in the question text, REMOVE them from the "question" field and split them into the "options" array.
+                5. No markdown.
             `;
 
             try {

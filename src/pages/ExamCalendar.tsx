@@ -3,8 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { FirestoreService, type Exam } from '../services/firebase'
 import Calendar from '../components/Calendar'
 import { Plus, X, Trash2, Calendar as CalendarIcon, BookOpen } from 'lucide-react'
-import clsx from 'clsx'
-import { format, isSameDay, parseISO } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 
 export default function ExamCalendar() {
     const { user } = useAuth()

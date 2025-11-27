@@ -16,6 +16,7 @@ export default function Simulations() {
     const [examFile, setExamFile] = useState<File | null>(null)
     const [answerKeyFile, setAnswerKeyFile] = useState<File | null>(null)
     const [isProcessing, setIsProcessing] = useState(false)
+    const [progress, setProgress] = useState(0)
 
     // Navigation State
     const [viewMode, setViewMode] = useState<'list' | 'details' | 'taking' | 'results'>('list')
@@ -63,6 +64,7 @@ export default function Simulations() {
         if (!user) return
 
         setIsProcessing(true)
+        setProgress(0)
 
         try {
             let questions = editingExam?.questions || []
@@ -82,7 +84,7 @@ export default function Simulations() {
                             answerKeyText = await FileParser.extractText(answerKeyFile)
                         }
 
-                        simulationData = await AIService.generateSimulationFromImages(images, answerKeyText)
+                        simulationData = await AIService.generateSimulationFromImages(images, answerKeyText, setProgress)
                     } catch (err) {
                         console.error("Error processing PDF as images:", err);
                         alert("Error processing PDF. Falling back to text extraction...");
@@ -92,7 +94,7 @@ export default function Simulations() {
                         if (answerKeyFile) {
                             answerKeyText = await FileParser.extractText(answerKeyFile)
                         }
-                        simulationData = await AIService.generateSimulationFromText(examText, answerKeyText)
+                        simulationData = await AIService.generateSimulationFromText(examText, answerKeyText, setProgress)
                     }
                 } else {
                     // DOCX or other text formats
@@ -109,7 +111,7 @@ export default function Simulations() {
                         answerKeyText = await FileParser.extractText(answerKeyFile)
                     }
 
-                    simulationData = await AIService.generateSimulationFromText(examText, answerKeyText)
+                    simulationData = await AIService.generateSimulationFromText(examText, answerKeyText, setProgress)
                 }
                 
                 if (simulationData?.questions && simulationData.questions.length > 0) {
@@ -620,9 +622,17 @@ export default function Simulations() {
                                     className="px-6 py-2 bg-primary text-background rounded-lg font-bold hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                                 >
                                     {isProcessing && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    {isProcessing ? 'Processing...' : 'Save Simulation'}
+                                    {isProcessing ? `Processing... ${progress}%` : 'Save Simulation'}
                                 </button>
                             </div>
+                            {isProcessing && (
+                                <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden mt-2">
+                                    <div 
+                                        className="bg-primary h-full transition-all duration-300" 
+                                        style={{ width: `${progress}%` }}
+                                    />
+                                </div>
+                            )}
                         </form>
                     </div>
                 </div>
